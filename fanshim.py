@@ -22,9 +22,15 @@ LED_CLK_PIN = 14
 DEFAULT_PID_KP = 0.95
 DEFAULT_PID_KI = 0.05
 DEFAULT_PID_GAIN = 1.00
-DEFAULT_PWM_SPEED = 100
+DEFAULT_PWM_SPEED = 80
 DEFAULT_PID_MIN_PWM_SPEED = 40
 DEFAULT_PID_MAX_PWM_SPEED = 100
+
+DEFAULT_RAM_AMBER = 70
+DEFAULT_RAM_RED = 95
+
+DEFAULT_CPU_AMBER = 70
+DEFAULT_CPU_RED = 95
 
 logger = logging.getLogger()
 
@@ -35,11 +41,15 @@ parser.add_argument("-v", "--verbose", action="store_true", default=False, help=
 parser.add_argument("--off-threshold", type=float, default=55.0, help="Temperature threshold in degrees C to enable fan")
 parser.add_argument("--on-threshold", type=float, default=65.0, help="Temperature threshold in degrees C to disable fan")
 parser.add_argument("--delay", type=float, default=2.0, help="Delay, in seconds, between temperature readings")
-# parser.add_argument("--preempt", action="store_true", default=False, help="Monitor CPU frequency and activate cooling premptively")
-# parser.add_argument("--verbose", action="store_true", default=False, help="Output temp and fan status messages")
-# parser.add_argument("--no-button", action="store_true", default=False, help="Disable button input")
 parser.add_argument("--no-led", action="store_true", default=False, help="Disable LED control")
 parser.add_argument("--brightness", type=float, default=31.0, help="LED brightness, from 0 to 255")
+
+parser.add_argument("--ram", action="store_true", default=False, help="Should percentage of RAM usage be used to colour LED, too")
+parser.add_argument("--ram-amber", type=float, default=DEFAULT_RAM_AMBER, help=f"Percentage when RAM usage will start colouring LED amber. Default {DEFAULT_RAM_AMBER}.")
+parser.add_argument("--ram-red", type=float, default=DEFAULT_RAM_RED, help=f"Percentage when RAM usage will chagne LED to red. Default {DEFAULT_RAM_RED}")
+parser.add_argument("--cpu", action="store_true", default=False, help="Should percentage of CPU usage be used to colour LED, too")
+parser.add_argument("--cpu-amber", type=float, default=DEFAULT_CPU_AMBER, help=f"Percentage when CPU usage will start colouring LED amber. Default {DEFAULT_CPU_AMBER}")
+parser.add_argument("--cpu-red", type=float, default=DEFAULT_CPU_RED, help=f"Percentage when CPU usage will chagne LED to red. Default is {DEFAULT_CPU_RED}")
 
 pwn_or_not = parser.add_mutually_exclusive_group()
 pwn_or_not.add_argument("--pwm", action="store_true", help=f"If selected fan is going to be driven with PWM at {DEFAULT_PWM_SPEED}% of speed")
@@ -54,8 +64,12 @@ parser.add_argument("--pid-min-pwm", type=float, default=DEFAULT_PID_MIN_PWM_SPE
 parser.add_argument("--pid-max-pwm", type=float, default=DEFAULT_PID_MAX_PWM_SPEED, help=f"PWM max speed when using PID. Used only if --pid parameter is set. Default {DEFAULT_PID_MAX_PWM_SPEED}")
 
 parser.add_argument("--fan-pin", type=int, default=FAN_PIN, help=f"Fan pin, default {FAN_PIN}")
-parser.add_argument("--led-clk-pin", type=int, default=LED_DAT_PIN, help=f"LED CLK pin, default {LED_DAT_PIN}")
-parser.add_argument("--led-data-pin", type=int, default=LED_CLK_PIN, help=f"LED DATA pin, default {LED_CLK_PIN}")
+parser.add_argument("--led-clk-pin", type=int, default=LED_CLK_PIN, help=f"LED CLK pin, default {LED_CLK_PIN}")
+parser.add_argument("--led-data-pin", type=int, default=LED_DAT_PIN, help=f"LED DATA pin, default {LED_DAT_PIN}")
+
+
+parser.add_argument("--install", action="store_true", help="If selected only install will happen. Installing means creating file in /etc/systemd/system.")
+parser.add_argument("--force", action="store_true", help="Only used if --install selected. It will allow overwriting existing file in /etc/systemd/system.")
 
 
 args = parser.parse_args()
@@ -88,7 +102,7 @@ def install(force: bool = False) -> None:
         if os.path.exists(f"/etc/systemd/system/{service_name}.service") and not force:
             logger.error(f"ERROR: '/etc/systemd/system/{service_name}.service' already exists. Use --force switch if you want to override it.")
         else:
-            print(f"Installing /etc/systemd/system/{service_name}.service")
+            logger.info(f"Installing /etc/systemd/system/{service_name}.service")
             try:
                 with open(f"/etc/systemd/system/{service_name}.service", "wb") as f:
                     f.write(f"""
@@ -98,7 +112,7 @@ After=rsyslog.service
 
 [Service]
 WorkingDirectory={parent_path}
-ExecStart=/usr/bin/python3 {this_file} --on-threshold 75 --off-threshold 60 --delay 2 --brightness 31 --pwm-speed 80 
+ExecStart=/usr/bin/python3 {this_file} --on-threshold 75 --off-threshold 60 --delay 2 --brightness 31 --pwm-speed 80 --ram --cpu
 Restart=on-failure
 StandardOutput=syslog
 StandardError=syslog
@@ -111,10 +125,10 @@ WantedBy=multi-user.target
                 os.system(f"systemctl enable {service_name}.service")
 
                 logger.info("Daemon successfully installed. Do following to run it:")
-                logger.info(f"service {service_name} start")
+                logger.info(f"sudo service {service_name} start")
             except PermissionError:
-                print(f"ERROR: Cannot install '/etc/systemd/system/{service_name}.service'.")
-                print(f"Maybe run this command with 'sudo'.")
+                logger.error(f"ERROR: Cannot install '/etc/systemd/system/{service_name}.service'.")
+                logger.error(f"Maybe run this command with 'sudo'.")
 
 
 class PID:
@@ -217,6 +231,7 @@ class PlasmaPixels:
         :param g: Amount of green: 0 to 255
         :param b: Amount of blue: 0 to 255
         """
+
         for x in range(4):
             self.set_pixel(x, r, g, b)
 
@@ -260,9 +275,12 @@ class PlasmaPixels:
             time.sleep(0.0000005)
 
 
+class Bunch(dict): __getattr__ = dict.__getitem__
+
+
 class Hardware:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, plasma_pixels: Optional[PlasmaPixels] = None) -> None:
+        self.plasma_pixels = plasma_pixels
 
     @staticmethod
     def get_cpu_temp() -> float:
@@ -272,22 +290,57 @@ class Hardware:
     def get_cpu_freq() -> float:
         return float(subprocess.check_output(["vcgencmd", "measure_clock", "arm"])[14:-1]) / 1000000
 
+    @staticmethod
+    def get_ram_usage() -> Bunch:
+        with os.popen('free') as f:
+            _ = f.readline()
+            split_line = f.readline().split()
+            return Bunch(total=int(split_line[1]), used=int(split_line[2]), free=int(split_line[3]))
+
+    @staticmethod
+    def get_cpu_usage() -> Bunch:
+        with os.popen("top -b -n3") as f:
+            line_no = 0
+            line = f.readline()
+            while not line.startswith("%Cpu(s)") and line_no < 3000:
+                line_no += 1
+                line = f.readline()
+                # print(f"1 l={line}")
+
+            line = f.readline()
+            while not line.startswith("%Cpu(s)") and line_no < 3000:
+                line_no += 1
+                line = f.readline()
+                # print(f"2 l={line}")
+
+            if line_no < 3000:
+                split_line = line.split()
+                user = float(split_line[1])
+                system = float(split_line[3])
+                return Bunch(total=user + system, user=user, system=system)
+
+            return Bunch(total=line_no, user=0, system=99)
+
 
 class Fanshim:
     def __init__(self,
                  hardware: Hardware,
-                 plasma_pixels: Optional[PlasmaPixels],
                  on_threshold: float,
                  off_threshold: float,
                  brightness: int,
                  fan_pin: int,
                  delay: float,
+                 no_led: bool,
                  pwm_max_speed: int = -1,
                  pwm_min_speed: int = -1,
                  pwm_freq: int = 4,
                  pid_kp: float = 0.0,
                  pid_ki: float = 0.0,
-                 pid_gain: float = 0.0) -> None:
+                 pid_gain: float = 0.0,
+                 ram_amber: float = 0.0,
+                 ram_red: float = 0.0,
+                 cpu_amber: float = 0.0,
+                 cpu_red: float = 0.0) -> None:
 
         self.hardware = hardware
 
@@ -297,6 +350,7 @@ class Fanshim:
         self.off_threshold = off_threshold
         self.brightness = brightness
         self.delay = delay
+        self.no_led = no_led
 
         self.pwm_freq = pwm_freq
         self.pwm_speed = pwm_max_speed
@@ -311,6 +365,18 @@ class Fanshim:
 
         self.cpu_temp = 0.0
         self.cpu_freq = 0.0
+        self.cpu_usage: Optional[Bunch] = None
+        self.ram_usage: Optional[Bunch] = None
+
+        self.cpu_percentage = 0.0
+        self.ram_percentage = 0.0
+        self.temp_percentage = 0.0
+        self.light_percentage = 0.0
+
+        self.ram_amber = ram_amber
+        self.ram_red = ram_red
+        self.cpu_amber = cpu_amber
+        self.cpu_red = cpu_red
 
         # For FAN
         GPIO.setup(FAN_PIN, GPIO.OUT)
@@ -323,15 +389,13 @@ class Fanshim:
         else:
             self.fan_pwm = None
 
-        self.plasma_pixels = plasma_pixels
-
         atexit.register(self._exit)
-        if self.plasma_pixels:
-            self.plasma_pixels.set_light(0, 0, 0)
+        if self.hardware.plasma_pixels:
+            self.hardware.plasma_pixels.set_light(0, 0, 0)
 
     def _exit(self) -> None:
-        if self.plasma_pixels:
-            self.plasma_pixels.set_light(0, 0, 0)
+        if self.hardware.plasma_pixels:
+            self.hardware.plasma_pixels.set_light(0, 0, 0)
         GPIO.cleanup()
 
     def set_fan(self, status: bool) -> bool:
@@ -355,10 +419,23 @@ class Fanshim:
 
     def watch_temp(self) -> None:
         if level == logging.DEBUG:
+
+            debug_s = f"Fan Status: {self.fan_enabled}/{self.pwm_speed if self.fan_enabled else 0:.2f}% temp: {self.cpu_temp}ºC Freq {self.cpu_freq:.1f}"
+
+            if self.cpu_usage:
+                debug_s += f" CPU: {self.cpu_usage.total:.1f}%"
+                debug_s += f" CPU LED: {self.cpu_percentage * 100.0:.1f}%"
+            if self.ram_usage:
+                debug_s += f" RAM: {self.ram_usage.used * 100.0 / self.ram_usage.total:.1f}%"
+                debug_s += f" RAM LED: {self.ram_percentage * 100.0:.1f}%"
+
+            debug_s += f" temp: {self.temp_percentage * 100.0:.1f}%"
+            debug_s += f" light: {self.light_percentage * 100.0:.1f}%"
+
             if self.pid:
-                logger.debug(f"Fan Status: {self.fan_enabled}/{self.pwm_speed if self.fan_enabled else 0:.2f}% temp: {self.cpu_temp}ºC Freq {self.cpu_freq}, PID {self.pid}")
-            else:
-                logger.debug(f"Fan Status: {self.fan_enabled}/{self.pwm_speed if self.fan_enabled else 0:.2f}% temp: {self.cpu_temp}ºC Freq {self.cpu_freq}")
+                debug_s += f"  PID {self.pid}"
+
+            logger.debug(debug_s)
 
         if self.pid:
             if self.cpu_temp <= self.off_threshold:
@@ -389,25 +466,57 @@ class Fanshim:
 
         return
 
-    def update_led_temperature(self) -> None:
-        if self.plasma_pixels:
+    def update_led(self) -> None:
+        temp = 0
+        if self.hardware.plasma_pixels:
             temp = self.cpu_temp
             temp -= self.off_threshold
             temp /= float(self.on_threshold - self.off_threshold)
             temp = max(0.0, min(1.0, temp))
-            temp = 1.0 - temp
-            temp *= 120.0
-            temp /= 360.0
-            r, g, b = [int(c * 255.0) for c in colorsys.hsv_to_rgb(temp, 1.0, self.brightness / 255.0)]
-            self.plasma_pixels.set_light(r, g, b)
+            self.temp_percentage = temp
+
+        ram = 0
+        if self.ram_usage:
+            ram = float(self.ram_usage.used) / float(self.ram_usage.total)
+            ram -= self.ram_amber
+            ram /= float(self.ram_red - self.ram_amber)
+            ram = max(0.0, min(1.0, ram))
+            self.ram_percentage = ram
+
+        cpu = 0
+        if self.cpu_usage:
+            cpu = self.cpu_usage.total / 100.0
+            cpu -= self.cpu_amber
+            cpu /= float(self.cpu_red) - float(self.cpu_amber)
+            cpu = max(0.0, min(1.0, cpu))
+            self.cpu_percentage = cpu
+
+        light = max(temp, ram, cpu)
+        self.light_percentage = light
+
+        light = 1.0 - light
+        light *= 120.0
+        light /= 360.0
+
+        r, g, b = [int(c * 255.0) for c in colorsys.hsv_to_rgb(light, 1.0, self.brightness / 255.0)]
+        self.hardware.plasma_pixels.set_light(r, g, b)
 
     def main_loop(self) -> None:
         while self.run:
             time.sleep(self.delay)
+            if self.cpu_red != 0.0:
+                self.cpu_usage = self.hardware.get_cpu_usage()
+
+            if self.ram_red != 0.0:
+                self.ram_usage = self.hardware.get_ram_usage()
+
             self.cpu_freq = self.hardware.get_cpu_freq()
             self.cpu_temp = self.hardware.get_cpu_temp()
+
             self.watch_temp()
-            self.update_led_temperature()
+
+            if not self.no_led:
+                self.update_led()
 
 
 pwm_speed = int(args.pwm_speed)
@@ -417,45 +526,58 @@ elif args.pid:
     pwm_speed = args.pid_max_pwm
 
 
-plasma_pixels: Optional[PlasmaPixels] = None
-
-if not args.no_led:
-    plasma_pixels = PlasmaPixels(dat=args.led_data_pin, clk=args.led_clk_pin)
-
 fanshim = Fanshim(
-    Hardware(),
-    PlasmaPixels(dat=LED_DAT_PIN, clk=LED_CLK_PIN),
+    Hardware(plasma_pixels=PlasmaPixels(dat=args.led_data_pin, clk=args.led_clk_pin) if not args.no_led else None),
     on_threshold=args.on_threshold,
     off_threshold=args.off_threshold,
     brightness=args.brightness,
     fan_pin=args.fan_pin,
     delay=args.delay,
+    no_led=args.no_led,
     pwm_max_speed=pwm_speed,
     pwm_min_speed=args.pid_min_pwm,
     pid_kp=args.pid_kp if args.pid else 0.0,
     pid_ki=args.pid_ki if args.pid else 0.0,
-    pid_gain=args.pid_gain if args.pid else 0.0)
+    pid_gain=args.pid_gain if args.pid else 0.0,
+    ram_amber=(args.ram_amber / 100.0) if args.ram else 0.0,
+    ram_red=(args.ram_red / 100.0) if args.ram else 0.0,
+    cpu_amber=(args.cpu_amber / 100.0) if args.cpu else 0.0,
+    cpu_red=(args.cpu_red / 100.0) if args.cpu else 0.0)
 
 if __name__ == '__main__':
-    logger.info("Starting Fanshim monitor...")
 
-    if args.pid:
-        logger.info(f"  FAN is driven using PID (PI really)")
-    elif pwm_speed > 0:
-        logger.info(f"  FAN is driven using PWM at {pwm_speed}%")
+    if args.install:
+        install(args.force)
     else:
-        logger.info(f"  FAN is driven using on/off")
+        logger.info("Starting Fanshim monitor...")
 
-    logger.info(f"  Debug level {logging.getLevelName(level)}")
-    logger.info(f"  Threshold: On: {args.on_threshold} Off: {args.off_threshold}")
-    logger.info(f"  Delay: {args.delay}")
-    if args.no_led:
-        logger.info(f"  LED control: OFF")
-    else:
-        logger.info(f"  LED brightness: {args.brightness}")
+        if args.pid:
+            logger.info(f"  FAN is driven using PID (PI really)")
+        elif pwm_speed > 0:
+            logger.info(f"  FAN is driven using PWM at {pwm_speed}%")
+        else:
+            logger.info(f"  FAN is driven using on/off")
 
-    try:
-        logger.info("Started Fanshim monitor.")
-        fanshim.main_loop()
-    except KeyboardInterrupt:
-        logger.info("Fanshim stopped.")
+        logger.info(f"  Debug level {logging.getLevelName(level)}")
+        logger.info(f"  Threshold: On: {args.on_threshold} Off: {args.off_threshold}")
+        logger.info(f"  Delay: {args.delay}")
+        if args.no_led:
+            logger.info(f"  LED control: OFF")
+        else:
+            logger.info(f"  LED brightness: {args.brightness} (0-255)")
+        if args.ram:
+            logger.info(f"  RAM LED control: {fanshim.ram_amber * 100:.1f}% - {fanshim.ram_red * 100:.1f}%")
+        else:
+            logger.info(f"  RAM LED control: OFF")
+        if args.cpu:
+            logger.info(f"  CPU LED control: {fanshim.cpu_amber * 100:.1f}% - {fanshim.cpu_red * 100:.1f}%")
+        else:
+            logger.info(f"  CPU LED control: OFF")
+
+        logger.info(f"  Current temperature: {fanshim.hardware.get_cpu_temp()}ºC")
+
+        try:
+            logger.info("Started Fanshim monitor.")
+            fanshim.main_loop()
+        except KeyboardInterrupt:
+            logger.info("Fanshim stopped.")
