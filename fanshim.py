@@ -17,7 +17,7 @@ import logging
 
 
 FAN_PIN = 18
-LED_DAT_PIN = 15
+LED_DATA_PIN = 15
 LED_CLK_PIN = 14
 DEFAULT_PID_KP = 0.95
 DEFAULT_PID_KI = 0.05
@@ -53,7 +53,7 @@ parser.add_argument("--cpu-red", type=float, default=DEFAULT_CPU_RED, help=f"Per
 
 pwn_or_not = parser.add_mutually_exclusive_group()
 pwn_or_not.add_argument("--pwm", action="store_true", help=f"If selected fan is going to be driven with PWM at {DEFAULT_PWM_SPEED}% of speed")
-pwn_or_not.add_argument("--pwm-speed", default=-1, help="If selected fan is going to be driven with PWM at given speed betwen 0-100")
+pwn_or_not.add_argument("--pwm-speed", type=int, default=-1, help="If selected fan is going to be driven with PWM at given speed betwen 0-100")
 pwn_or_not.add_argument("--pid", action="store_true", help="If selected fan will be driven by PID algorithm")
 pwn_or_not.add_argument("--on-off", action="store_true", help="Default if nothing else selected. No need to specify.")
 
@@ -65,7 +65,7 @@ parser.add_argument("--pid-max-pwm", type=float, default=DEFAULT_PID_MAX_PWM_SPE
 
 parser.add_argument("--fan-pin", type=int, default=FAN_PIN, help=f"Fan pin, default {FAN_PIN}")
 parser.add_argument("--led-clk-pin", type=int, default=LED_CLK_PIN, help=f"LED CLK pin, default {LED_CLK_PIN}")
-parser.add_argument("--led-data-pin", type=int, default=LED_DAT_PIN, help=f"LED DATA pin, default {LED_DAT_PIN}")
+parser.add_argument("--led-data-pin", type=int, default=LED_DATA_PIN, help=f"LED DATA pin, default {LED_DATA_PIN}")
 
 
 parser.add_argument("--install", action="store_true", help="If selected only install will happen. Installing means creating file in /etc/systemd/system.")
@@ -87,7 +87,63 @@ GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 
 
-def install(force: bool = False) -> None:
+def _create_command_args(args: argparse.Namespace) -> str:
+    args_list = []
+    if args.verbose:
+        args_list.append("--verbose")
+    if args.quiet:
+        args_list.append("--quiet")
+
+    args_list.append(f"--off-threshold {args.off_threshold:.1f}")
+    args_list.append(f"--on-threshold {args.on_threshold:.1f}")
+    args_list.append(f"--delay {args.delay}")
+    if args.no_led:
+        args_list.append(f"--no-led")
+
+    args_list.append(f"--brightness {args.brightness:.1f}")
+
+    if args.ram:
+        args_list.append(f"--ram")
+        args_list.append(f"--ram-amber {args.ram_amber:.1f}")
+        args_list.append(f"--ram-red {args.ram_red:.1f}")
+
+    if args.cpu:
+        args_list.append(f"--cpu")
+        args_list.append(f"--cpu-amber {args.cpu_amber:.1f}")
+        args_list.append(f"--cpu-red {args.cpu_red:.1f}")
+
+    if args.pwm:
+        args_list.append(f"--pwm")
+
+    if args.pwm_speed >= 0:
+        args_list.append(f"--pwm-speed {args.pwm_speed}")
+
+    if args.on_off:
+        args_list.append(f"--on-off")
+
+    if args.pid:
+        args_list.append(f"--pid")
+        args_list.append(f"--pid-kp {args.pid_kp}")
+        args_list.append(f"--pid-ki {args.pid_ki}")
+        args_list.append(f"--pid-gain {args.pid_gain}")
+        args_list.append(f"--pid-min-pwm {args.pid_min_pwm}")
+        args_list.append(f"--pid-max-pwm {args.pid_max_pwm}")
+
+    if args.fan_pin != FAN_PIN:
+        args_list.append(f"--fan-pin {args.fan_pin}")
+
+    if args.led_clk_pin != LED_CLK_PIN:
+        args_list.append(f"--led-clk-pin {args.led_clk_pin}")
+
+    if args.led_data_pin != LED_DATA_PIN:
+        args_list.append(f"--led-data-pin {args.led_data_pin}")
+
+    return " ".join(args_list)
+
+
+def install(args: argparse.Namespace) -> None:
+    force = args.force
+
     this_file = __file__
     parent_path = os.path.dirname(this_file)
     service_name = os.path.split(this_file)[-1][:-3]
@@ -112,7 +168,7 @@ After=rsyslog.service
 
 [Service]
 WorkingDirectory={parent_path}
-ExecStart=/usr/bin/python3 {this_file} --on-threshold 75 --off-threshold 60 --delay 2 --brightness 31 --pwm-speed 80 --ram --cpu
+ExecStart=/usr/bin/python3 {this_file} {_create_command_args(args)}
 Restart=on-failure
 StandardOutput=syslog
 StandardError=syslog
@@ -503,7 +559,6 @@ class Fanshim:
 
     def main_loop(self) -> None:
         while self.run:
-            time.sleep(self.delay)
             if self.cpu_red != 0.0:
                 self.cpu_usage = self.hardware.get_cpu_usage()
 
@@ -517,6 +572,8 @@ class Fanshim:
 
             if not self.no_led:
                 self.update_led()
+
+            time.sleep(self.delay)
 
 
 pwm_speed = int(args.pwm_speed)
@@ -547,7 +604,7 @@ fanshim = Fanshim(
 if __name__ == '__main__':
 
     if args.install:
-        install(args.force)
+        install(args)
     else:
         logger.info("Starting Fanshim monitor...")
 
