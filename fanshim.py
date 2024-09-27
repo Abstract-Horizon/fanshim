@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 #
 # Based on:
+# https://github.com/pimoroni/fanshim-python
 # https://github.com/jane-t/rpi-fanshim
-#
+# https://github.com/grayerbeard/fanshim-python-pwm
+
 import argparse
 import atexit
 import colorsys
@@ -52,8 +54,8 @@ parser.add_argument("--cpu-amber", type=float, default=DEFAULT_CPU_AMBER, help=f
 parser.add_argument("--cpu-red", type=float, default=DEFAULT_CPU_RED, help=f"Percentage when CPU usage will chagne LED to red. Default is {DEFAULT_CPU_RED}")
 
 pwn_or_not = parser.add_mutually_exclusive_group()
-pwn_or_not.add_argument("--pwm", action="store_true", help=f"If selected fan is going to be driven with PWM at {DEFAULT_PWM_SPEED}% of speed")
 pwn_or_not.add_argument("--pwm-speed", type=int, default=-1, help="If selected fan is going to be driven with PWM at given speed betwen 0-100")
+pwn_or_not.add_argument("--pwm", action="store_true", help=f"If selected fan is going to be driven with PWM at {DEFAULT_PWM_SPEED} percentage of speed")
 pwn_or_not.add_argument("--pid", action="store_true", help="If selected fan will be driven by PID algorithm")
 pwn_or_not.add_argument("--on-off", action="store_true", help="Default if nothing else selected. No need to specify.")
 
